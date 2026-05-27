@@ -809,21 +809,21 @@ body {
 const SUPABASE_URL = 'https://obzuoqctsltrxartrzdb.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_-2NEP3fbmqFi1zouAtGnHQ_t7UfdZqc';
 
-let supabase = null;
+let dbClient = null;
 let authViewState = 'login'; // login | register
 
 function initSupabase() {
   if (window.supabase && window.supabase.createClient) {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    dbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   } else {
     console.warn('Supabase SDK 未加载，认证功能不可用');
   }
 }
 
 async function checkSession() {
-  if (!supabase) return false;
+  if (!dbClient) return false;
   try {
-    const { data, error } = await supabase.auth.getSession();
+    const { data, error } = await dbClient.auth.getSession();
     if (error) return false;
     return data.session !== null;
   } catch (e) {
@@ -1756,7 +1756,7 @@ $('authOverlay').addEventListener('keydown', (e) => {
 
 $('authLogout').addEventListener('click', (e) => {
   e.preventDefault();
-  if (supabase) supabase.auth.signOut();
+  if (dbClient) dbClient.auth.signOut();
   location.reload();
 });
 
@@ -1802,8 +1802,8 @@ async function handleAuth() {
   try {
     const isLogin = authViewState === 'login';
     const result = isLogin
-      ? await supabase.auth.signInWithPassword({ email, password })
-      : await supabase.auth.signUp({
+      ? await dbClient.auth.signInWithPassword({ email, password })
+      : await dbClient.auth.signUp({
           email,
           password,
           options: { data: { display_name: nickname } }
