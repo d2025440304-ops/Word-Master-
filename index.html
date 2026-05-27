@@ -1831,10 +1831,6 @@ async function handleAuth() {
 }
 
 function startWordApp() {
-  appData = loadData();
-  migrateData();
-  currentBank = appData.bank || 'cet4';
-
   getActiveWords().forEach(word => ensureWord(word.w));
   saveData();
 
@@ -1873,6 +1869,12 @@ function migrateData() {
 
 async function init() {
   initSupabase();
+
+  // 先加载基础数据，让侧边栏正确显示词库数量
+  appData = loadData();
+  migrateData();
+  currentBank = appData.bank || 'cet4';
+  updateStatsUI();
 
   const loggedIn = await checkSession();
   if (loggedIn) {
