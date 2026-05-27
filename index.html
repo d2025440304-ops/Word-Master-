@@ -546,6 +546,34 @@ body {
 .panel .hint { font-size: 13px; color: var(--text-secondary); margin: 12px 0 24px; line-height: 1.5; }
 .panel .btn-row { display: flex; gap: 12px; }
 
+/* ========== 登录/注册面板 ========== */
+.auth-panel { max-width: 400px; }
+.auth-field { margin-bottom: 12px; }
+.auth-field input {
+  width: 100%; padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px; font-size: 16px; font-family: inherit;
+  outline: none; background: rgba(0,0,0,0.02);
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.auth-field input:focus {
+  border-color: var(--primary);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(0,0,0,0.04);
+}
+.auth-switch {
+  text-align: center; margin-top: 20px;
+  font-size: 14px; color: var(--text-secondary);
+}
+.auth-switch a {
+  color: var(--primary); text-decoration: none; font-weight: 600;
+}
+.auth-logout {
+  text-align: center; margin-top: 12px; font-size: 14px;
+}
+.auth-logout a { color: var(--text-tertiary); text-decoration: none; }
+.auth-panel .btn-row .btn { flex: 1; }
+
 /* ========== 日历 ========== */
 .calendar-weekdays {
   display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
@@ -611,6 +639,8 @@ body {
   .sidebar .toolbar .tool-label { margin-top: 2px; }
 }
 </style>
+<!-- Supabase SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -747,6 +777,27 @@ body {
   </div>
 </div>
 
+<!-- 登录/注册面板 -->
+<div class="overlay" id="authOverlay">
+  <div class="panel auth-panel">
+    <h3 id="authTitle">登录</h3>
+    <div class="auth-field">
+      <input type="email" id="fieldEmail" placeholder="电子邮箱" autocomplete="email" inputmode="email">
+    </div>
+    <div class="auth-field">
+      <input type="password" id="fieldPassword" placeholder="密码" autocomplete="current-password">
+    </div>
+    <div class="auth-field hidden" id="nicknameField">
+      <input type="text" id="fieldNickname" placeholder="昵称" autocomplete="username">
+    </div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn btn-primary" id="btnAuthSubmit">登录</button>
+    </div>
+    <p class="auth-switch">还没有账号？<a href="#" id="authToggle">立即注册</a></p>
+    <p class="auth-logout"><a href="#" id="authLogout" class="hidden">退出登录</a></p>
+  </div>
+</div>
+
 <div class="overlay" id="overlay" aria-modal="true" role="dialog">
   <div class="panel" id="panel"></div>
 </div>
@@ -754,6 +805,53 @@ body {
 <div class="toast" id="toast" role="alert" aria-live="polite"></div>
 
 <script>
+// ========== Supabase 初始化（部署时通过 Netlify 环境变量注入） ==========
+const SUPABASE_URL = 'https://obzuoqctsltrxartrzdb.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_-2NEP3fbmqFi1zouAtGnHQ_t7UfdZqc';
+
+let supabase = null;
+let authViewState = 'login'; // login | register
+
+function initSupabase() {
+  if (window.supabase && window.supabase.createClient) {
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } else {
+    console.warn('Supabase SDK 未加载，认证功能不可用');
+  }
+}
+
+async function checkSession() {
+  if (!supabase) return false;
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return false;
+    return data.session !== null;
+  } catch (e) {
+    console.warn('会话检查失败', e);
+    return false;
+  }
+}
+
+function showAuthPanel() {
+  $('authOverlay').classList.add('show');
+  $('authOverlay').style.pointerEvents = 'auto';
+  $('authOverlay').style.opacity = '1';
+}
+
+function hideAuthPanel() {
+  $('authOverlay').classList.remove('show');
+  $('authOverlay').style.pointerEvents = 'none';
+  $('authOverlay').style.opacity = '0';
+}
+
+function syncAuthUI() {
+  const isLogin = authViewState === 'login';
+  $('authTitle').textContent = isLogin ? '登录' : '注册';
+  $('btnAuthSubmit').textContent = isLogin ? '登录' : '注册';
+  $('nicknameField').classList.toggle('hidden', isLogin);
+  $('authToggle').textContent = isLogin ? '立即注册' : '已有账号？去登录';
+}
+
 // ========== 词库数据（异步加载） ==========
 let wordBanks = {};
 
@@ -1443,6 +1541,25 @@ $('wbTabs').addEventListener('click', (e) => {
   renderWordBook();
 });
 
+// 认证交互
+$('btnAuthSubmit').addEventListener('click', handleAuth);
+
+$('authToggle').addEventListener('click', (e) => {
+  e.preventDefault();
+  authViewState = authViewState === 'login' ? 'register' : 'login';
+  syncAuthUI();
+});
+
+$('authOverlay').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleAuth();
+});
+
+$('authLogout').addEventListener('click', (e) => {
+  e.preventDefault();
+  if (supabase) supabase.auth.signOut();
+  location.reload();
+});
+
 // 全局热键
 document.addEventListener('keydown', (e) => {
   if ($('overlay').classList.contains('show')) return;
@@ -1463,6 +1580,77 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
+
+// ========== 认证处理 ==========
+async function handleAuth() {
+  const email = $('fieldEmail').value.trim();
+  const password = $('fieldPassword').value;
+  const nickname = $('fieldNickname').value.trim();
+
+  if (!email || !password) {
+    showToast('请填写邮箱和密码');
+    return;
+  }
+  if (authViewState === 'register' && !nickname) {
+    showToast('请填写昵称');
+    return;
+  }
+
+  const btn = $('btnAuthSubmit');
+  btn.disabled = true;
+
+  try {
+    const isLogin = authViewState === 'login';
+    const result = isLogin
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { display_name: nickname } }
+        });
+
+    if (result.error) {
+      showToast(result.error.message);
+      return;
+    }
+
+    if (!isLogin) {
+      showToast('注册成功！请查收邮箱验证邮件');
+      authViewState = 'login';
+      syncAuthUI();
+    } else {
+      showToast('登录成功');
+      hideAuthPanel();
+      startWordApp();
+    }
+  } catch (e) {
+    showToast(e.message || '认证请求失败');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function startWordApp() {
+  appData = loadData();
+  migrateData();
+  currentBank = appData.bank || 'cet4';
+
+  getActiveWords().forEach(word => ensureWord(word.w));
+  saveData();
+
+  studySeconds = 0;
+  buildSession();
+  renderCard();
+  startTimer();
+
+  window.addEventListener('beforeunload', () => {
+    if (studySeconds > 0) {
+      const stats = getDailyStats();
+      stats.duration = (stats.duration || 0) + studySeconds;
+    }
+    saveData();
+  });
+}
 
 // ========== 初始化与防错迁移 ==========
 function migrateData() {
@@ -1485,25 +1673,16 @@ function migrateData() {
 
 async function init() {
   await loadWordBanks();
-  appData = loadData();
-  migrateData();
-  currentBank = appData.bank || 'cet4';
+  initSupabase();
 
-  getActiveWords().forEach(word => ensureWord(word.w));
-  saveData();
-  
-  studySeconds = 0;
-  buildSession();
-  renderCard();
-  startTimer();
-
-  window.addEventListener('beforeunload', () => {
-    if (studySeconds > 0) {
-      const stats = getDailyStats();
-      stats.duration = (stats.duration || 0) + studySeconds;
-    }
-    saveData();
-  });
+  const loggedIn = await checkSession();
+  if (loggedIn) {
+    hideAuthPanel();
+    startWordApp();
+  } else {
+    showAuthPanel();
+    syncAuthUI();
+  }
 }
 
 init();
