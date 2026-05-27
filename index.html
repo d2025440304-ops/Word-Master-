@@ -1105,9 +1105,148 @@ function loadData() {
 function saveData() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+    scheduleCloudSync(); // 触发防抖云端同步
   } catch (e) {
     console.warn("Storage quota exceeded or inaccessible.", e);
   }
+}
+
+// ========== 云端同步（Supabase） ==========
+let _syncTimer = null;
+
+// 从云端拉取数据并合并到本地（更新的一方优先）
+async function syncFromCloud() {
+  if (!dbClient) return;
+  const { data: { user } } = await dbClient.auth.getUser();
+  if (!user) return;
+
+  try {
+    // 拉取单词进度，与本地合并：取 last_review 更新的那条
+    const { data: cloudWords } = await dbClient.from('word_progress')
+      .select('word_key, level, last_review, next_review')
+      .eq('user_id', user.id);
+
+    if (cloudWords) {
+      for (const cw of cloudWords) {
+        const local = appData.words[cw.word_key];
+        const cloudTime = cw.last_review ? new Date(cw.last_review).getTime() : 0;
+        const localTime = (local && local.lastReview) ? local.lastReview : 0;
+        if (!local || cloudTime > localTime) {
+          appData.words[cw.word_key] = {
+            level: cw.level,
+            lastReview: cloudTime || null,
+            nextReview: cw.next_review ? new Date(cw.next_review).getTime() : null,
+            custom: local ? local.custom : false
+          };
+        }
+      }
+    }
+
+    // 拉取每日统计，与本地合并：每天各项取最大值
+    const { data: cloudStats } = await dbClient.from('daily_stats')
+      .select('date, learned, reviewed, correct, duration')
+      .eq('user_id', user.id);
+
+    if (cloudStats) {
+      for (const cs of cloudStats) {
+        const local = appData.dailyStats[cs.date];
+        if (!local) {
+          appData.dailyStats[cs.date] = { learned: cs.learned, reviewed: cs.reviewed, correct: cs.correct, duration: cs.duration };
+        } else {
+          local.learned = Math.max(local.learned, cs.learned);
+          local.reviewed = Math.max(local.reviewed, cs.reviewed);
+          local.correct = Math.max(local.correct, cs.correct);
+          local.duration = Math.max(local.duration, cs.duration);
+        }
+      }
+    }
+
+    // 拉取用户设置并合并
+    const { data: settings } = await dbClient.from('user_settings')
+      .select('streak, last_study_date, bank, custom_words')
+      .eq('user_id', user.id)
+      .single();
+
+    if (settings) {
+      if (settings.streak > (appData.streak || 0)) appData.streak = settings.streak;
+      if (settings.last_study_date && (!appData.lastStudyDate || settings.last_study_date > appData.lastStudyDate)) {
+        appData.lastStudyDate = settings.last_study_date;
+      }
+      if (settings.bank && !appData.bank) appData.bank = settings.bank;
+
+      // 合并自定义单词定义（按 w 去重）
+      if (settings.custom_words && Array.isArray(settings.custom_words)) {
+        const existing = new Set(appData.customWords.map(cw => cw.w));
+        for (const cw of settings.custom_words) {
+          if (!existing.has(cw.w)) {
+            appData.customWords.push(cw);
+            existing.add(cw.w);
+          }
+        }
+      }
+    }
+
+    saveData(); // 合并结果写回 localStorage
+  } catch (e) {
+    console.warn('云端同步拉取失败', e);
+  }
+}
+
+// 推送本地数据到云端（防抖 3 秒，避免频繁请求）
+async function syncToCloud() {
+  if (!dbClient) return;
+  const { data: { user } } = await dbClient.auth.getUser();
+  if (!user) return;
+
+  try {
+    const now = new Date().toISOString();
+
+    // 同步单词进度（分批 upsert，每批最多 50 条）
+    const wordEntries = Object.entries(appData.words);
+    for (let i = 0; i < wordEntries.length; i += 50) {
+      const batch = wordEntries.slice(i, i + 50).map(([key, state]) => ({
+        user_id: user.id,
+        word_key: key,
+        level: state.level,
+        last_review: state.lastReview ? new Date(state.lastReview).toISOString() : null,
+        next_review: state.nextReview ? new Date(state.nextReview).toISOString() : null,
+        updated_at: now
+      }));
+      const { error } = await dbClient.from('word_progress').upsert(batch, { onConflict: 'user_id, word_key' });
+      if (error) console.warn('同步单词进度失败', error);
+    }
+
+    // 同步每日统计
+    const statsEntries = Object.entries(appData.dailyStats);
+    if (statsEntries.length > 0) {
+      const statsBatch = statsEntries.map(([date, s]) => ({
+        user_id: user.id, date,
+        learned: s.learned, reviewed: s.reviewed, correct: s.correct, duration: s.duration
+      }));
+      const { error } = await dbClient.from('daily_stats').upsert(statsBatch, { onConflict: 'user_id, date' });
+      if (error) console.warn('同步每日统计失败', error);
+    }
+
+    // 同步用户设置
+    const { error } = await dbClient.from('user_settings').upsert({
+      user_id: user.id,
+      streak: appData.streak || 0,
+      last_study_date: appData.lastStudyDate,
+      bank: currentBank,
+      custom_words: appData.customWords || []
+    }, { onConflict: 'user_id' });
+    if (error) console.warn('同步用户设置失败', error);
+  } catch (e) {
+    console.warn('云端同步推送失败', e);
+  }
+}
+
+function scheduleCloudSync() {
+  if (_syncTimer) clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(() => {
+    syncToCloud();
+    _syncTimer = null;
+  }, 3000);
 }
 
 // ========== 词库管理 ==========
@@ -1830,7 +1969,9 @@ async function handleAuth() {
   }
 }
 
-function startWordApp() {
+async function startWordApp() {
+  await syncFromCloud(); // 先从云端拉取进度并合并
+  currentBank = appData.bank || currentBank; // 云端可能覆盖了词库选择
   getActiveWords().forEach(word => ensureWord(word.w));
   saveData();
 
