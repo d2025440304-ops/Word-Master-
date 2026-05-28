@@ -147,90 +147,6 @@ body {
   transition: width 0.6s var(--ease);
 }
 
-/* ========== 单词本 ========== */
-.wordbook {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-.wb-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 0;
-  cursor: pointer;
-  user-select: none;
-}
-.wb-header:hover { opacity: 0.7; }
-.wb-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-.wb-arrow {
-  font-size: 12px;
-  color: var(--text-secondary);
-  transition: transform 0.2s var(--ease);
-}
-.wb-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 240px;
-  overflow: hidden;
-}
-.wb-tabs {
-  display: flex;
-  gap: 4px;
-}
-.wb-tab {
-  padding: 4px 12px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  border-radius: 8px;
-  font-family: inherit;
-  transition: all 0.2s var(--ease);
-}
-.wb-tab.active {
-  background: rgba(0,0,0,0.06);
-  color: var(--text);
-}
-.wb-list {
-  overflow-y: auto;
-  flex: 1;
-}
-.wb-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-  line-height: 32px;
-  padding: 0 4px;
-  border-radius: 6px;
-  cursor: default;
-}
-.wb-item:hover { background: rgba(0,0,0,0.03); }
-.wb-item-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  color: var(--text);
-}
-.wb-item-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-.wb-item-dot.mastered { background: var(--success); }
-.wb-item-dot.learning { background: var(--text-tertiary); }
-
 /* ========== 工具栏（Nav） ========== */
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
 .tool-btn {
@@ -546,6 +462,63 @@ body {
 .panel .hint { font-size: 13px; color: var(--text-secondary); margin: 12px 0 24px; line-height: 1.5; }
 .panel .btn-row { display: flex; gap: 12px; }
 
+/* ========== 单词本浮层页面 ========== */
+.wordbook-panel { max-width: 680px; padding: 28px 24px 36px; }
+.wordbook-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 16px; margin-bottom: 18px;
+}
+.wordbook-head h3 { text-align: left; margin: 0 0 4px; }
+.wordbook-subtitle { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.wordbook-close {
+  width: 36px; height: 36px; border: none; border-radius: 50%;
+  background: rgba(0,0,0,0.05); color: var(--text-secondary);
+  font-size: 22px; line-height: 1; cursor: pointer; flex-shrink: 0;
+  transition: background 0.2s var(--ease), transform 0.15s var(--ease);
+}
+.wordbook-close:active { transform: scale(0.92); }
+.wordbook-tabs {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+  padding: 4px; background: rgba(0,0,0,0.04); border-radius: 14px; margin-bottom: 14px;
+}
+.wordbook-tab {
+  border: none; border-radius: 11px; background: transparent;
+  padding: 10px 8px; font-size: 14px; font-weight: 600;
+  color: var(--text-secondary); font-family: inherit; cursor: pointer;
+}
+.wordbook-tab.active { background: #fff; color: var(--text); box-shadow: var(--shadow-sm); }
+.wordbook-summary {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px;
+}
+.wordbook-metric {
+  padding: 12px; border-radius: 14px; background: rgba(0,0,0,0.03);
+}
+.wordbook-metric strong { display: block; font-size: 22px; color: var(--text); line-height: 1; }
+.wordbook-metric span { display: block; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+.wordbook-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: min(52vh, 460px); overflow-y: auto; padding-right: 2px;
+}
+.wordbook-row {
+  display: grid; grid-template-columns: minmax(88px, 0.8fr) minmax(0, 1.4fr) auto;
+  align-items: center; gap: 10px; padding: 12px 10px;
+  border-radius: 14px; background: rgba(0,0,0,0.025);
+}
+.wordbook-row:hover { background: rgba(0,0,0,0.045); }
+.wordbook-word { font-size: 15px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wordbook-meaning { font-size: 14px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wordbook-level {
+  min-width: 52px; padding: 5px 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; text-align: center;
+  background: rgba(0,0,0,0.05); color: var(--text-secondary);
+}
+.wordbook-level.mastered { background: var(--success-bg); color: var(--success-text); }
+.wordbook-empty {
+  min-height: 180px; display: flex; align-items: center; justify-content: center;
+  text-align: center; color: var(--text-secondary); line-height: 1.7;
+  background: rgba(0,0,0,0.025); border-radius: 18px; padding: 24px;
+}
+
 /* ========== 登录/注册面板 ========== */
 .auth-panel { max-width: 400px; }
 .auth-field { margin-bottom: 12px; }
@@ -637,6 +610,11 @@ body {
   }
   .sidebar .toolbar .tool-btn { padding: 8px 12px; font-size: 20px; }
   .sidebar .toolbar .tool-label { margin-top: 2px; }
+  .wordbook-panel { padding: 24px 18px max(32px, env(safe-area-inset-bottom)); }
+  .wordbook-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .wordbook-row { grid-template-columns: 1fr auto; gap: 4px 10px; }
+  .wordbook-meaning { grid-column: 1 / -1; white-space: normal; line-height: 1.45; }
+  .wordbook-level { grid-column: 2; grid-row: 1; }
 }
 </style>
 <!-- Supabase SDK -->
@@ -693,23 +671,9 @@ body {
         <div class="progress-fill" id="progressBar" style="width:0%"></div>
       </div>
 
-      <!-- 单词本 -->
-      <section class="wordbook" id="wordbook">
-        <div class="wb-header" id="wbHeader">
-          <span class="wb-title">单词本</span>
-          <span class="wb-arrow" id="wbArrow">▸</span>
-        </div>
-        <div class="wb-body hidden" id="wbBody">
-          <div class="wb-tabs" id="wbTabs">
-            <button class="wb-tab active" data-tab="all">全部</button>
-            <button class="wb-tab" data-tab="mastered">已掌握</button>
-          </div>
-          <div class="wb-list" id="wbList"></div>
-        </div>
-      </section>
-
       <nav class="toolbar" aria-label="操作工具栏">
         <button class="tool-btn" id="btnCalendar" aria-label="学习日历">📅<span class="tool-label">日历</span></button>
+        <button class="tool-btn" id="btnWordBook" aria-label="查看单词本">📖<span class="tool-label">单词本</span></button>
         <button class="tool-btn" id="btnImport" aria-label="导入单词">📥<span class="tool-label">导入</span></button>
         <button class="tool-btn" id="btnReset" aria-label="重置进度">🔄<span class="tool-label">重置</span></button>
         <button class="tool-btn" id="btnBank" aria-label="切换词库">📚<span class="tool-label" id="bankBtnLabel">CET-4</span></button>
@@ -873,7 +837,6 @@ let sessionStartTime = null;
 let studyTimer = null;
 let studySeconds = 0;
 let waitingAdvance = false;
-let wordBookExpanded = false;
 let wordBookTab = 'all';
 let sessionWordCounts = {};
 let answerLocked = false;
@@ -1326,48 +1289,162 @@ function showEmptyState() {
   }
 }
 
-// ========== 单词本渲染 ==========
-function renderWordBook() {
+// ========== 单词本浮层 ==========
+function getWordBookEntries() {
   const allWords = getActiveWords();
   const wordMap = {};
-  allWords.forEach(w => { wordMap[w.w] = w.m; });
+  allWords.forEach(w => { wordMap[w.w] = w; });
 
   const entries = [];
   for (const [key, state] of Object.entries(appData.words)) {
-    if (state.level > 0 && wordMap[key]) {
-      entries.push({ word: key, meaning: wordMap[key], level: state.level });
+    const word = wordMap[key];
+    if (word && state && (state.level > 0 || state.lastReview)) {
+      entries.push({
+        word: key,
+        meaning: word.m || '',
+        phonetic: word.p || '',
+        example: word.e || '',
+        level: state.level,
+        lastReview: state.lastReview || 0,
+        nextReview: state.nextReview || null
+      });
     }
   }
 
   entries.sort((a, b) => {
     if (b.level !== a.level) return b.level - a.level;
+    if (b.lastReview !== a.lastReview) return b.lastReview - a.lastReview;
     return a.word.localeCompare(b.word);
   });
 
-  const filtered = wordBookTab === 'mastered'
-    ? entries.filter(e => e.level >= 6)
-    : entries;
+  return entries;
+}
 
-  const list = $('wbList');
+function getFilteredWordBookEntries(entries) {
+  if (wordBookTab === 'mastered') return entries.filter(e => e.level >= 6);
+  if (wordBookTab === 'learning') return entries.filter(e => e.level < 6);
+  return entries;
+}
+
+function renderWordBook() {
+  const panel = $('panel');
+  if (!panel || panel.dataset.panel !== 'wordbook') return;
+
+  const entries = getWordBookEntries();
+  const learned = entries.length;
+  const mastered = entries.filter(e => e.level >= 6).length;
+  const learning = entries.filter(e => e.level > 0 && e.level < 6).length;
+  const filtered = getFilteredWordBookEntries(entries);
+  const bankName = currentBank === 'cet6' ? 'CET-6' : currentBank === 'custom' ? '自定义' : 'CET-4';
+
+  panel.className = 'panel wordbook-panel';
+  panel.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'wordbook-head';
+
+  const titleWrap = document.createElement('div');
+  const title = document.createElement('h3');
+  const subtitle = document.createElement('div');
+  title.textContent = '单词本';
+  subtitle.className = 'wordbook-subtitle';
+  subtitle.textContent = bankName + ' · 只显示当前词库中已经学习过的单词';
+  titleWrap.appendChild(title);
+  titleWrap.appendChild(subtitle);
+
+  const close = document.createElement('button');
+  close.className = 'wordbook-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', '关闭单词本');
+  close.textContent = '×';
+  close.addEventListener('click', closePanel);
+
+  head.appendChild(titleWrap);
+  head.appendChild(close);
+  panel.appendChild(head);
+
+  const summary = document.createElement('div');
+  summary.className = 'wordbook-summary';
+  [
+    ['已学习', learned],
+    ['学习中', learning],
+    ['已掌握', mastered]
+  ].forEach(([label, value]) => {
+    const item = document.createElement('div');
+    const num = document.createElement('strong');
+    const text = document.createElement('span');
+    item.className = 'wordbook-metric';
+    num.textContent = value;
+    text.textContent = label;
+    item.appendChild(num);
+    item.appendChild(text);
+    summary.appendChild(item);
+  });
+  panel.appendChild(summary);
+
+  const tabs = document.createElement('div');
+  tabs.className = 'wordbook-tabs';
+  [
+    ['all', '全部'],
+    ['learning', '学习中'],
+    ['mastered', '已掌握']
+  ].forEach(([tabKey, label]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'wordbook-tab' + (wordBookTab === tabKey ? ' active' : '');
+    btn.textContent = label;
+    btn.dataset.tab = tabKey;
+    btn.addEventListener('click', () => {
+      wordBookTab = tabKey;
+      renderWordBook();
+    });
+    tabs.appendChild(btn);
+  });
+  panel.appendChild(tabs);
+
+  const list = document.createElement('div');
+  list.className = 'wordbook-list';
+
   if (filtered.length === 0) {
-    list.innerHTML = '<div style="font-size:13px;color:var(--text-tertiary);padding:8px 4px;">暂无单词</div>';
-    return;
+    const empty = document.createElement('div');
+    empty.className = 'wordbook-empty';
+    empty.textContent = wordBookTab === 'mastered'
+      ? '还没有完全掌握的单词。继续把 level 推到 6，它们会自动出现在这里。'
+      : '当前分类还没有单词。';
+    list.appendChild(empty);
+  } else {
+    filtered.forEach(entry => {
+      const row = document.createElement('div');
+      const word = document.createElement('div');
+      const meaning = document.createElement('div');
+      const level = document.createElement('div');
+      row.className = 'wordbook-row';
+      word.className = 'wordbook-word';
+      meaning.className = 'wordbook-meaning';
+      level.className = 'wordbook-level' + (entry.level >= 6 ? ' mastered' : '');
+      word.textContent = entry.word;
+      meaning.textContent = (entry.phonetic ? entry.phonetic + ' · ' : '') + entry.meaning;
+      level.textContent = entry.level >= 6 ? '掌握' : entry.level > 0 ? 'Lv.' + entry.level : '待巩固';
+      row.appendChild(word);
+      row.appendChild(meaning);
+      row.appendChild(level);
+      list.appendChild(row);
+    });
   }
 
-  list.innerHTML = '';
-  filtered.forEach(e => {
-    const dotClass = e.level >= 6 ? 'mastered' : 'learning';
-    const item = document.createElement('div');
-    const text = document.createElement('span');
-    const dot = document.createElement('span');
-    item.className = 'wb-item';
-    text.className = 'wb-item-text';
-    text.textContent = e.word + ' ' + e.meaning;
-    dot.className = 'wb-item-dot ' + dotClass;
-    item.appendChild(text);
-    item.appendChild(dot);
-    list.appendChild(item);
-  });
+  panel.appendChild(list);
+}
+
+function showWordBookPanel() {
+  $('panel').dataset.panel = 'wordbook';
+  wordBookTab = wordBookTab || 'all';
+  renderWordBook();
+  $('overlay').classList.add('show');
+}
+
+function closePanel() {
+  $('overlay').classList.remove('show');
+  $('panel').removeAttribute('data-panel');
 }
 
 function renderCard() {
@@ -1664,6 +1741,8 @@ function getCalColor(total) {
 
 function showCalendarPanel() {
   const panel = $('panel');
+  panel.className = 'panel';
+  panel.dataset.panel = 'calendar';
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -1715,11 +1794,13 @@ function showCalendarPanel() {
     });
   });
 
-  $('btnCalendarClose').onclick = () => $('overlay').classList.remove('show');
+  $('btnCalendarClose').onclick = closePanel;
 }
 
 function showImportPanel() {
   const panel = $('panel');
+  panel.className = 'panel';
+  panel.dataset.panel = 'import';
   panel.innerHTML = `
     <h3>📥 自定义导入</h3>
     <textarea id="importText" placeholder="abandon /ə'bændən/ 放弃"></textarea>
@@ -1766,9 +1847,9 @@ function showImportPanel() {
     } else {
       showToast('未识别到有效词汇格式');
     }
-    $('overlay').classList.remove('show');
+    closePanel();
   };
-  $('btnImportCancel').onclick = () => $('overlay').classList.remove('show');
+  $('btnImportCancel').onclick = closePanel;
 }
 
 // ========== 交互与事件挂载 ==========
@@ -1793,6 +1874,7 @@ document.querySelector('.card-wrapper').addEventListener('click', () => { if (wa
 $('btnContinue').addEventListener('click', () => { buildSession(); renderCard(); });
 
 $('btnCalendar').addEventListener('click', () => showCalendarPanel());
+$('btnWordBook').addEventListener('click', () => showWordBookPanel());
 $('btnImport').addEventListener('click', () => showImportPanel());
 $('btnReset').addEventListener('click', () => {
   if (confirm('是否重置您的所有学习进度？（词库内容将被保留）')) {
@@ -1812,24 +1894,7 @@ $('btnBank').addEventListener('click', () => {
   showToast(`已无缝切换至 ${$('bankLabel').textContent}`);
 });
 
-$('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) $('overlay').classList.remove('show'); });
-
-// 单词本交互
-$('wbHeader').addEventListener('click', () => {
-  wordBookExpanded = !wordBookExpanded;
-  $('wbArrow').textContent = wordBookExpanded ? '▾' : '▸';
-  $('wbBody').classList.toggle('hidden', !wordBookExpanded);
-  if (wordBookExpanded) renderWordBook();
-});
-
-$('wbTabs').addEventListener('click', (e) => {
-  const tab = e.target.closest('.wb-tab');
-  if (!tab) return;
-  wordBookTab = tab.dataset.tab;
-  $('wbTabs').querySelectorAll('.wb-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
-  renderWordBook();
-});
+$('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) closePanel(); });
 
 // 认证交互
 $('btnAuthSubmit').addEventListener('click', handleAuth);
