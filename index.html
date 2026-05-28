@@ -841,6 +841,17 @@ let wordBookTab = 'all';
 let sessionWordCounts = {};
 let answerLocked = false;
 let autoAdvanceTimer = null;
+let activeWordsCache = null;
+let activeWordMapCache = null;
+let activeStatsCache = null;
+let activeStatsSignature = '';
+
+function invalidateWordCaches() {
+  activeWordsCache = null;
+  activeWordMapCache = null;
+  activeStatsCache = null;
+  activeStatsSignature = '';
+}
 
 // ========== 数据持久化（健壮性优化） ==========
 // 格式化本地日期为 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致日期错一天）
@@ -895,11 +906,12 @@ async function syncFromCloud() {
 
     if (cloudWords) {
       for (const cw of cloudWords) {
-        const local = appData.words[cw.word_key];
+        const wordKey = normalizeWordKey(cw.word_key);
+        const local = appData.words[wordKey];
         const cloudTime = cw.last_review ? new Date(cw.last_review).getTime() : 0;
         const localTime = (local && local.lastReview) ? local.lastReview : 0;
         if (!local || cloudTime > localTime) {
-          appData.words[cw.word_key] = {
+          appData.words[wordKey] = {
             level: cw.level,
             lastReview: cloudTime || null,
             nextReview: cw.next_review ? new Date(cw.next_review).getTime() : null,
@@ -943,16 +955,19 @@ async function syncFromCloud() {
 
       // 合并自定义单词定义（按 w 去重）
       if (settings.custom_words && Array.isArray(settings.custom_words)) {
-        const existing = new Set(appData.customWords.map(cw => cw.w));
+        const existing = new Set(appData.customWords.map(cw => normalizeWordKey(cw.w)));
         for (const cw of settings.custom_words) {
-          if (!existing.has(cw.w)) {
-            appData.customWords.push(cw);
-            existing.add(cw.w);
+          const key = normalizeWordKey(cw.w);
+          if (key && !existing.has(key)) {
+            appData.customWords.push({ ...cw, w: key });
+            existing.add(key);
           }
         }
+        invalidateWordCaches();
       }
     }
 
+    pruneUntouchedWordStates();
     saveData(); // 合并结果写回 localStorage
   } catch (e) {
     console.warn('云端同步拉取失败', e);
@@ -970,7 +985,9 @@ async function syncToCloud() {
     const now = new Date().toISOString();
 
     // 同步单词进度（分批 upsert，每批最多 50 条）
-    const wordEntries = Object.entries(appData.words);
+    const wordEntries = Object.entries(appData.words).filter(([, state]) =>
+      state && ((state.level || 0) > 0 || state.lastReview || state.nextReview)
+    );
     for (let i = 0; i < wordEntries.length; i += 50) {
       const batch = wordEntries.slice(i, i + 50).map(([key, state]) => ({
         user_id: user.id,
@@ -1019,19 +1036,94 @@ function scheduleCloudSync() {
 
 // ========== 词库管理 ==========
 function getActiveWords() {
-  const bankWords = currentBank === 'cet6' ? CET6_WORDS : CET4_WORDS;
+  if (activeWordsCache) return activeWordsCache;
   const fileCustom = (typeof CUSTOM_WORDS !== 'undefined') ? CUSTOM_WORDS : [];
-  // 合并：银行词库 + 文件自定义词 + 运行时导入词（按 w 去重）
-  const all = [...bankWords, ...fileCustom, ...(appData.customWords || [])];
+  let all = CET4_WORDS;
+  if (currentBank === 'cet6') all = CET6_WORDS;
+  else if (currentBank === 'custom') all = [...fileCustom, ...(appData.customWords || [])];
   const seen = new Set();
-  return all.filter(w => { const ok = !seen.has(w.w); seen.add(w.w); return ok; });
+  activeWordsCache = all.filter(w => {
+    const key = normalizeWordKey(w.w);
+    const ok = key && !seen.has(key);
+    if (ok) seen.add(key);
+    return ok;
+  });
+  activeWordMapCache = null;
+  return activeWordsCache;
+}
+
+function getActiveWordMap() {
+  if (activeWordMapCache) return activeWordMapCache;
+  activeWordMapCache = new Map();
+  getActiveWords().forEach(word => activeWordMapCache.set(normalizeWordKey(word.w), word));
+  return activeWordMapCache;
+}
+
+function getKnownWordKeySet() {
+  const keys = new Set();
+  CET4_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
+  CET6_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
+  if (typeof CUSTOM_WORDS !== 'undefined') CUSTOM_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
+  (appData.customWords || []).forEach(w => keys.add(normalizeWordKey(w.w)));
+  return keys;
+}
+
+function hasCustomWords() {
+  const fileCustom = (typeof CUSTOM_WORDS !== 'undefined') ? CUSTOM_WORDS : [];
+  return fileCustom.length > 0 || (appData.customWords || []).length > 0;
+}
+
+function normalizeWordKey(word) {
+  return String(word || '').trim().toLowerCase();
 }
 
 function ensureWord(wordKey) {
-  if (!Object.prototype.hasOwnProperty.call(appData.words, wordKey)) {
-    appData.words[wordKey] = { level: 0, lastReview: null, nextReview: null, custom: false };
+  const key = normalizeWordKey(wordKey);
+  if (!Object.prototype.hasOwnProperty.call(appData.words, key)) {
+    appData.words[key] = { level: 0, lastReview: null, nextReview: null, custom: false };
   }
-  return appData.words[wordKey];
+  activeStatsCache = null;
+  return appData.words[key];
+}
+
+function pruneUntouchedWordStates() {
+  let changed = false;
+  for (const [key, state] of Object.entries(appData.words || {})) {
+    if (!state || ((state.level || 0) === 0 && !state.lastReview && !state.nextReview)) {
+      delete appData.words[key];
+      changed = true;
+    }
+  }
+  if (changed) invalidateWordCaches();
+  return changed;
+}
+
+function getActiveStats() {
+  const activeWords = getActiveWords();
+  const signature = activeWords.length + '|' + Object.keys(appData.words).length + '|' + currentBank + '|' + Math.floor(Date.now() / 60000);
+  if (activeStatsCache && activeStatsSignature === signature) return activeStatsCache;
+
+  const now = Date.now();
+  let review = 0;
+  let brandNew = 0;
+  let mastered = 0;
+  let learned = 0;
+
+  for (const word of activeWords) {
+    const state = appData.words[normalizeWordKey(word.w)];
+    if (!state) {
+      brandNew++;
+      continue;
+    }
+    if (state.level >= 6) mastered++;
+    if (state.level > 0 || state.lastReview) learned++;
+    if (state.nextReview && state.nextReview <= now && state.level < 6) review++;
+    if ((state.level || 0) === 0 && !state.lastReview && !state.nextReview) brandNew++;
+  }
+
+  activeStatsCache = { total: activeWords.length, review, newWords: brandNew, mastered, learned };
+  activeStatsSignature = signature;
+  return activeStatsCache;
 }
 
 // ========== 复习算法（艾宾浩斯曲线） ==========
@@ -1053,7 +1145,7 @@ function getLearningQueues(excludeWords = new Set()) {
 
   for (const word of allWords) {
     if (excludeWords.has(word.w)) continue;
-    const state = appData.words[word.w];
+    const state = appData.words[normalizeWordKey(word.w)];
     if (state && state.level === 0 && state.nextReview) {
       if (state.nextReview <= now) {
         reviewQueue.push({ word, type: 'review', due: state.nextReview, level: 0 });
@@ -1110,6 +1202,7 @@ function markWord(wordKey, known) {
   }
   state.lastReview = Date.now();
   state.nextReview = getNextReviewTime(state.level);
+  activeStatsCache = null;
   return { newLevel: state.level };
 }
 
@@ -1117,35 +1210,20 @@ function markWordUnsure(wordKey) {
   const state = ensureWord(wordKey);
   state.lastReview = Date.now();
   state.nextReview = Date.now() + 10 * 60 * 1000;
+  activeStatsCache = null;
   return { newLevel: state.level };
 }
 
 function getReviewCount() {
-  const now = Date.now();
-  let count = 0;
-  for (const word of getActiveWords()) {
-    const s = appData.words[word.w];
-    if (s && s.nextReview && s.nextReview <= now && s.level < 6) count++;
-  }
-  return count;
+  return getActiveStats().review;
 }
 
 function getNewWordCount() {
-  let count = 0;
-  for (const word of getActiveWords()) {
-    const s = appData.words[word.w];
-    if (!s || (s.level === 0 && !s.nextReview)) count++;
-  }
-  return count;
+  return getActiveStats().newWords;
 }
 
 function getMasteredCount() {
-  let count = 0;
-  for (const word of getActiveWords()) {
-    const s = appData.words[word.w];
-    if (s && s.level >= 6) count++;
-  }
-  return count;
+  return getActiveStats().mastered;
 }
 
 function shuffle(arr) {
@@ -1333,7 +1411,7 @@ function renderWordBook() {
   const entries = getWordBookEntries();
   const learned = entries.length;
   const mastered = entries.filter(e => e.level >= 6).length;
-  const learning = entries.filter(e => e.level > 0 && e.level < 6).length;
+  const learning = entries.filter(e => e.level < 6).length;
   const filtered = getFilteredWordBookEntries(entries);
   const bankName = currentBank === 'cet6' ? 'CET-6' : currentBank === 'custom' ? '自定义' : 'CET-4';
 
@@ -1654,7 +1732,7 @@ function answerChoice(index, choices) {
   recordStudy(isCorrect);
   if (!isCorrect) scheduleImmediateRetry(currentWord);
   
-  if (isCorrect && appData.words[wordData.w].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
+  if (isCorrect && appData.words[normalizeWordKey(wordData.w)].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
   isCorrect ? scheduleAutoAdvance(1000) : showAdvanceHint();
 }
 
@@ -1682,7 +1760,7 @@ function answerSpelling() {
   recordStudy(isCorrect);
   if (!isCorrect) scheduleImmediateRetry(currentWord);
   
-  if (isCorrect && appData.words[wordData.w].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
+  if (isCorrect && appData.words[normalizeWordKey(wordData.w)].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
   
   input.disabled = true;
   isCorrect ? scheduleAutoAdvance(1200) : showAdvanceHint();
@@ -1818,6 +1896,8 @@ function showImportPanel() {
     
     const lines = text.split('\n').filter(l => l.trim());
     let added = 0;
+    let skipped = 0;
+    const knownKeys = getKnownWordKeySet();
     
     for (const line of lines) {
       let parts = line.includes(' - ') ? line.split(' - ') : line.includes('\t') ? line.split('\t') : null;
@@ -1826,22 +1906,25 @@ function showImportPanel() {
         if (idx > 0) parts = [line.slice(0, idx), line.slice(idx + 1)];
       }
       if (parts && parts[0].trim()) {
-        const w = parts[0].trim(), rest = (parts[1] || '').trim();
+        const rawWord = parts[0].trim();
+        const key = normalizeWordKey(rawWord);
+        const rest = (parts[1] || '').trim();
         let p = '', m = rest;
         const match = rest.match(/^(\/[^/]+\/)\s*(.*)/);
         if (match) { p = match[1]; m = match[2]; }
-        const existsInBank = (currentBank === 'cet6' ? CET6_WORDS : CET4_WORDS).some(bw => bw.w === w);
-        const existsInFile = (typeof CUSTOM_WORDS !== 'undefined') && CUSTOM_WORDS.some(cw => cw.w === w);
-        const existsInApp = appData.customWords.some(cw => cw.w === w);
-        if (w && m && !existsInBank && !existsInFile && !existsInApp) {
-          appData.customWords.push({ w, p, m, e: '' });
+        if (key && m && !knownKeys.has(key)) {
+          appData.customWords.push({ w: key, p, m, e: '' });
+          knownKeys.add(key);
           added++;
+        } else {
+          skipped++;
         }
       }
     }
     if (added > 0) {
+      invalidateWordCaches();
       saveData();
-      showToast(`成功导入 ${added} 个自定义单词`);
+      showToast(`成功导入 ${added} 个自定义单词${skipped ? '，跳过 ' + skipped + ' 条' : ''}`);
       buildSession();
       renderCard();
     } else {
@@ -1887,9 +1970,9 @@ $('btnReset').addEventListener('click', () => {
 $('btnBank').addEventListener('click', () => {
   clearAutoAdvance();
   flushStudyDuration();
-  currentBank = currentBank === 'cet4' ? 'cet6' : (currentBank === 'cet6' && appData.customWords.length > 0) ? 'custom' : 'cet4';
+  currentBank = currentBank === 'cet4' ? 'cet6' : (currentBank === 'cet6' && hasCustomWords()) ? 'custom' : 'cet4';
   appData.bank = currentBank;
-  getActiveWords().forEach(word => ensureWord(word.w));
+  invalidateWordCaches();
   saveData(); buildSession(); renderCard();
   showToast(`已无缝切换至 ${$('bankLabel').textContent}`);
 });
@@ -1999,7 +2082,8 @@ async function handleAuth() {
 async function startWordApp() {
   await syncFromCloud(); // 先从云端拉取进度并合并
   currentBank = appData.bank || currentBank; // 云端可能覆盖了词库选择
-  getActiveWords().forEach(word => ensureWord(word.w));
+  invalidateWordCaches();
+  pruneUntouchedWordStates();
   saveData();
 
   studySeconds = 0;
@@ -2015,20 +2099,42 @@ async function startWordApp() {
 
 // ========== 初始化与防错迁移 ==========
 function migrateData() {
-  if (appData.version && appData.version >= 1) return;
-  
-  for (const [date, old] of Object.entries(appData.dailyStats)) {
-    if (old && Object.prototype.hasOwnProperty.call(old, 'studied')) {
-      appData.dailyStats[date] = { learned: old.studied || 0, reviewed: 0, correct: old.known || 0, duration: old.seconds || 0 };
+  const alreadyMigrated = appData.version && appData.version >= 1;
+  const normalizedWords = {};
+  for (const [key, state] of Object.entries(appData.words || {})) {
+    const normalizedKey = normalizeWordKey(key);
+    if (!normalizedKey || !state) continue;
+    const existing = normalizedWords[normalizedKey];
+    if (!existing || (state.lastReview || 0) > (existing.lastReview || 0) || (state.level || 0) > (existing.level || 0)) {
+      normalizedWords[normalizedKey] = state;
     }
   }
-  
-  for (const [key, w] of Object.entries(appData.words)) {
-    if (!w) continue;
-    if (w.level >= 5) { w.level = 6; w.nextReview = getNextReviewTime(6); }
-    else if (w.level > 0 && w.lastReview) { w.nextReview = getNextReviewTime(w.level); }
+  appData.words = normalizedWords;
+
+  const customMap = new Map();
+  for (const word of (appData.customWords || [])) {
+    const key = normalizeWordKey(word.w);
+    if (key && !customMap.has(key)) customMap.set(key, { ...word, w: key });
   }
-  appData.version = 1;
+  appData.customWords = Array.from(customMap.values());
+
+  if (!alreadyMigrated) {
+    for (const [date, old] of Object.entries(appData.dailyStats)) {
+      if (old && Object.prototype.hasOwnProperty.call(old, 'studied')) {
+        appData.dailyStats[date] = { learned: old.studied || 0, reviewed: 0, correct: old.known || 0, duration: old.seconds || 0 };
+      }
+    }
+
+    for (const [key, w] of Object.entries(appData.words)) {
+      if (!w) continue;
+      if (w.level >= 5) { w.level = 6; w.nextReview = getNextReviewTime(6); }
+      else if (w.level > 0 && w.lastReview) { w.nextReview = getNextReviewTime(w.level); }
+    }
+    appData.version = 1;
+  }
+
+  pruneUntouchedWordStates();
+  invalidateWordCaches();
   saveData();
 }
 
