@@ -876,6 +876,8 @@ let waitingAdvance = false;
 let wordBookExpanded = false;
 let wordBookTab = 'all';
 let sessionWordCounts = {};
+let answerLocked = false;
+let autoAdvanceTimer = null;
 
 // ========== 数据持久化（健壮性优化） ==========
 // 格式化本地日期为 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致日期错一天）
@@ -1369,6 +1371,7 @@ function renderWordBook() {
 }
 
 function renderCard() {
+  answerLocked = false;
   if (!currentWord) {
     showEmptyState();
     updateStatsUI();
@@ -1451,6 +1454,7 @@ function renderSpelling() {
 
 // ========== 进度控制 ==========
 function advanceWord() {
+  clearAutoAdvance();
   sessionIndex++;
   if (sessionIndex < sessionWords.length) {
     currentWord = sessionWords[sessionIndex];
@@ -1472,6 +1476,23 @@ function showAdvanceHint() {
 function hideAdvanceHint() {
   waitingAdvance = false;
   $('advanceHint').classList.add('hidden');
+}
+
+function clearAutoAdvance() {
+  if (autoAdvanceTimer) {
+    clearTimeout(autoAdvanceTimer);
+    autoAdvanceTimer = null;
+  }
+}
+
+function scheduleAutoAdvance(delay) {
+  clearAutoAdvance();
+  const expectedWord = currentWord ? currentWord.word.w : null;
+  autoAdvanceTimer = setTimeout(() => {
+    autoAdvanceTimer = null;
+    if (!currentWord || currentWord.word.w !== expectedWord || waitingAdvance) return;
+    advanceWord();
+  }, delay);
 }
 
 function tryAdvance() {
@@ -1503,7 +1524,8 @@ function scheduleImmediateRetry(item) {
 
 // ========== 模式应答逻辑 ==========
 function answerFlashcard(quality) {
-  if (!currentWord || !isFlipped) return;
+  if (!currentWord || !isFlipped || answerLocked) return;
+  answerLocked = true;
   const wordKey = currentWord.word.w;
   const isCorrect = quality === 'know';
   
@@ -1526,14 +1548,20 @@ function answerFlashcard(quality) {
   isFlipped = false;
   $('flashcardActions').classList.remove('visible');
 
+  let handled = false;
   const afterFlip = () => {
+    if (handled) return;
+    handled = true;
     card.removeEventListener('transitionend', afterFlip);
     isCorrect ? advanceWord() : showAdvanceHint();
   };
   card.addEventListener('transitionend', afterFlip);
+  setTimeout(afterFlip, 700);
 }
 
 function answerChoice(index, choices) {
+  if (!currentWord || answerLocked) return;
+  answerLocked = true;
   const wordData = currentWord.word;
   const correctIndex = choices.findIndex(c => c.w === wordData.w);
   const isCorrect = index === correctIndex;
@@ -1550,13 +1578,15 @@ function answerChoice(index, choices) {
   if (!isCorrect) scheduleImmediateRetry(currentWord);
   
   if (isCorrect && appData.words[wordData.w].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
-  isCorrect ? setTimeout(() => advanceWord(), 1000) : showAdvanceHint();
+  isCorrect ? scheduleAutoAdvance(1000) : showAdvanceHint();
 }
 
 function answerSpelling() {
+  if (!currentWord || answerLocked) return;
   const input = $('spellingInput');
   const value = input.value.trim();
   if (!value || input.disabled) return;
+  answerLocked = true;
 
   const wordData = currentWord.word;
   const isCorrect = value.toLowerCase() === wordData.w.toLowerCase();
@@ -1578,10 +1608,13 @@ function answerSpelling() {
   if (isCorrect && appData.words[wordData.w].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
   
   input.disabled = true;
-  isCorrect ? setTimeout(() => advanceWord(), 1200) : showAdvanceHint();
+  isCorrect ? scheduleAutoAdvance(1200) : showAdvanceHint();
 }
 
 function buildSession() {
+  clearAutoAdvance();
+  hideAdvanceHint();
+  answerLocked = false;
   sessionWords = [];
   sessionWordCounts = {};
 
@@ -1742,6 +1775,8 @@ function showImportPanel() {
 $('modeTabs').addEventListener('click', (e) => {
   const tab = e.target.closest('.mode-tab');
   if (!tab || tab.dataset.mode === currentMode) return;
+  if (waitingAdvance) tryAdvance();
+  clearAutoAdvance();
   currentMode = tab.dataset.mode;
   $('modeTabs').querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
@@ -1761,12 +1796,14 @@ $('btnCalendar').addEventListener('click', () => showCalendarPanel());
 $('btnImport').addEventListener('click', () => showImportPanel());
 $('btnReset').addEventListener('click', () => {
   if (confirm('是否重置您的所有学习进度？（词库内容将被保留）')) {
+    clearAutoAdvance();
     studySeconds = 0;
     appData.words = {}; appData.dailyStats = {}; appData.streak = 0; appData.lastStudyDate = null;
     saveData(); buildSession(); renderCard(); showToast('系统进度已重置');
   }
 });
 $('btnBank').addEventListener('click', () => {
+  clearAutoAdvance();
   flushStudyDuration();
   currentBank = currentBank === 'cet4' ? 'cet6' : (currentBank === 'cet6' && appData.customWords.length > 0) ? 'custom' : 'cet4';
   appData.bank = currentBank;
@@ -1804,7 +1841,10 @@ $('authToggle').addEventListener('click', (e) => {
 });
 
 $('authOverlay').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') handleAuth();
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    handleAuth();
+  }
 });
 
 $('authLogout').addEventListener('click', (e) => {
@@ -1816,6 +1856,8 @@ $('authLogout').addEventListener('click', (e) => {
 // 全局热键
 document.addEventListener('keydown', (e) => {
   if ($('overlay').classList.contains('show')) return;
+  if ($('authOverlay').classList.contains('show')) return;
+  if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
   if (waitingAdvance) {
     if (e.key === ' ' || e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); tryAdvance(); }
     return;
@@ -1836,6 +1878,13 @@ document.addEventListener('keydown', (e) => {
 
 // ========== 认证处理 ==========
 async function handleAuth() {
+  if (!dbClient) {
+    showToast('认证服务暂不可用');
+    return;
+  }
+  const btn = $('btnAuthSubmit');
+  if (btn.disabled) return;
+
   const email = $('fieldEmail').value.trim();
   const password = $('fieldPassword').value;
   const nickname = $('fieldNickname').value.trim();
@@ -1849,7 +1898,6 @@ async function handleAuth() {
     return;
   }
 
-  const btn = $('btnAuthSubmit');
   btn.disabled = true;
 
   try {
