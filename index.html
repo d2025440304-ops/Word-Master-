@@ -1083,8 +1083,15 @@ let wordBookExpanded = false;
 let wordBookTab = 'all';
 
 // ========== 数据持久化（健壮性优化） ==========
+// 格式化本地日期为 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致日期错一天）
+function fmtLocalDate(d) {
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
 function getToday() {
-  return new Date().toISOString().slice(0, 10);
+  return fmtLocalDate(new Date());
 }
 
 function loadData() {
@@ -1392,7 +1399,9 @@ function recordStudy(known) {
   if (known) stats.correct++;
 
   const today = getToday();
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const y = new Date();
+  y.setDate(y.getDate() - 1);
+  const yesterday = fmtLocalDate(y);
   if (appData.lastStudyDate === yesterday) {
     appData.streak++;
   } else if (appData.lastStudyDate !== today) {
@@ -1730,7 +1739,7 @@ function showCalendarPanel() {
   for (let i = 89; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
+    const dateStr = fmtLocalDate(d);
     const stats = appData.dailyStats[dateStr] || { learned: 0, reviewed: 0, correct: 0, duration: 0 };
     dayData.push({
       date: dateStr, dayOfWeek: d.getDay(),
