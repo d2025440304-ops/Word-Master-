@@ -278,6 +278,17 @@ body {
   text-align: center;
   line-height: 1.6;
 }
+.code-example {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(0,0,0,0.04);
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-top: 8px;
+  text-align: left;
+  display: none;
+}
 
 .badge {
   position: absolute;
@@ -462,6 +473,42 @@ body {
 .panel .hint { font-size: 13px; color: var(--text-secondary); margin: 12px 0 24px; line-height: 1.5; }
 .panel .btn-row { display: flex; gap: 12px; }
 
+/* ---- 词库选择面板项 ---- */
+.bank-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 16px; cursor: pointer; font-size: 15px;
+  border-radius: 10px; transition: background 0.15s;
+}
+.bank-item:hover { background: var(--bg); }
+.bank-item-active { font-weight: 600; background: var(--bg); }
+.bank-item-count { font-size: 12px; color: var(--text-tertiary); }
+.bank-item-sub { padding-left: 40px; font-size: 14px; }
+.bank-badge {
+  font-size: 10px; background: #ff6b35; color: #fff;
+  padding: 1px 6px; border-radius: 4px; margin-left: 6px; font-weight: 700;
+}
+
+/* ---- 引导气泡 ---- */
+.bank-tooltip {
+  position: fixed; z-index: 1001;
+  background: #1a1a2e; color: #fff;
+  padding: 14px 18px; border-radius: 14px;
+  font-size: 14px; line-height: 1.6; max-width: 240px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+  transition: opacity 0.3s, transform 0.3s;
+}
+.bank-tooltip.hidden { opacity: 0; transform: translateY(6px); pointer-events: none; }
+.bank-tooltip-arrow {
+  position: absolute; right: 20px; bottom: -8px;
+  width: 16px; height: 16px; background: #1a1a2e; transform: rotate(45deg);
+}
+.bank-tooltip-btn {
+  display: block; margin-top: 10px; background: rgba(255,255,255,0.15);
+  border: none; color: #fff; padding: 6px 14px; border-radius: 8px;
+  font-size: 13px; cursor: pointer;
+}
+.bank-tooltip-btn:hover { background: rgba(255,255,255,0.25); }
+
 /* ========== 单词本浮层页面 ========== */
 .wordbook-panel { max-width: 680px; padding: 28px 24px 36px; }
 .wordbook-head {
@@ -631,6 +678,7 @@ body {
 <script src="data/cet4.js"></script>
 <script src="data/cet6.js"></script>
 <script src="data/custom-words.js"></script>
+<script src="data/programmer.js"></script>
 </head>
 <body>
 
@@ -693,7 +741,7 @@ body {
       <nav class="mode-tabs" id="modeTabs" aria-label="模式切换">
         <button class="mode-tab active" data-mode="flashcard">闪卡</button>
         <button class="mode-tab" data-mode="choice">选择</button>
-        <button class="mode-tab" data-mode="spelling">拼写</button>
+        <button class="mode-tab" data-mode="spelling" id="spellingTab">拼写</button>
       </nav>
 
       <section class="card-wrapper">
@@ -709,6 +757,7 @@ body {
             <div class="card-face card-back">
               <div class="word-cn" id="wordCn"></div>
               <div class="word-example" id="wordExample"></div>
+              <div class="code-example" id="codeExample"></div>
             </div>
           </div>
         </div>
@@ -781,6 +830,12 @@ body {
 </div>
 
 <div class="toast" id="toast" role="alert" aria-live="polite"></div>
+
+<div class="bank-tooltip hidden" id="bankTooltip">
+  <div class="bank-tooltip-arrow"></div>
+  程序员专属词库已上线<br>快速扫盲代码命名中的英文缩写
+  <button class="bank-tooltip-btn" id="bankTooltipBtn">去看看</button>
+</div>
 
 <script>
 // ========== Supabase 初始化（部署时通过 Netlify 环境变量注入） ==========
@@ -1056,6 +1111,10 @@ function getActiveWords() {
   let all = CET4_WORDS;
   if (currentBank === 'cet6') all = CET6_WORDS;
   else if (currentBank === 'custom') all = [...fileCustom, ...(appData.customWords || [])];
+  else if (currentBank.startsWith('programmer')) {
+    const sub = PROGRAMMER_SUB_BANKS.find(s => s.bank === currentBank);
+    all = sub ? sub.words : PROGRAMMER_WORDS;
+  }
   const seen = new Set();
   activeWordsCache = all.filter(w => {
     const key = normalizeWordKey(w.w);
@@ -1086,6 +1145,18 @@ function getKnownWordKeySet() {
 function hasCustomWords() {
   const fileCustom = (typeof CUSTOM_WORDS !== 'undefined') ? CUSTOM_WORDS : [];
   return fileCustom.length > 0 || (appData.customWords || []).length > 0;
+}
+
+function isProgrammerBank() { return currentBank && currentBank.startsWith('programmer'); }
+
+function getBankLabel() {
+  if (currentBank === 'cet4') return 'CET-4';
+  if (currentBank === 'cet6') return 'CET-6';
+  if (currentBank === 'custom') return '自定';
+  if (currentBank === 'programmer') return '程序员';
+  const sub = PROGRAMMER_SUB_BANKS.find(s => s.bank === currentBank);
+  if (sub) return '程序员·' + sub.label;
+  return 'CET-4';
 }
 
 function normalizeWordKey(word) {
@@ -1342,10 +1413,14 @@ function updateStatsUI() {
   const pct = Math.min(100, Math.round(totalStudied / DEFAULT_DAILY_GOAL * 100));
   $('progressBar').style.width = pct + '%';
 
-  const bankName = currentBank === 'cet6' ? 'CET-6' : currentBank === 'custom' ? '自定' : 'CET-4';
+  const bankName = getBankLabel();
   $('bankLabel').textContent = bankName + ' 词库';
   if ($('bankBtnLabel')) $('bankBtnLabel').textContent = bankName;
   renderWordBook();
+  // 程序员词库隐藏拼写tab
+  if ($('spellingTab')) {
+    $('spellingTab').style.display = isProgrammerBank() ? 'none' : '';
+  }
 }
 
 // ========== 状态容器分发渲染 ==========
@@ -1428,7 +1503,7 @@ function renderWordBook() {
   const mastered = entries.filter(e => e.level >= 6).length;
   const learning = entries.filter(e => e.level < 6).length;
   const filtered = getFilteredWordBookEntries(entries);
-  const bankName = currentBank === 'cet6' ? 'CET-6' : currentBank === 'custom' ? '自定义' : 'CET-4';
+  const bankName = currentBank === 'custom' ? '自定义' : getBankLabel();
 
   panel.className = 'panel wordbook-panel';
   panel.innerHTML = '';
@@ -1565,6 +1640,15 @@ function renderFlashcard() {
   $('wordPhonetic').textContent = wordData.p || '';
   $('wordCn').textContent = wordData.m;
   $('wordExample').textContent = wordData.e || '';
+  // 程序员词库：闪卡背面显示代码例句
+  if ($('codeExample')) {
+    if (isProgrammerBank() && wordData.e) {
+      $('codeExample').textContent = wordData.e;
+      $('codeExample').style.display = 'block';
+    } else {
+      $('codeExample').style.display = 'none';
+    }
+  }
   
   const isReview = currentWord.type === 'review';
   $('badge').textContent = isReview ? '复习' : '新词';
@@ -1982,14 +2066,121 @@ $('btnReset').addEventListener('click', () => {
     saveData(); buildSession(); renderCard(); showToast('系统进度已重置');
   }
 });
-$('btnBank').addEventListener('click', () => {
+// ========== 词库选择面板（overlay+panel 模式） ==========
+
+function showBankTooltip() {
+  const tooltip = $('bankTooltip');
+  if (!tooltip) return;
+  const btn = $('btnBank');
+  const btnRect = btn.getBoundingClientRect();
+  tooltip.style.left = (btnRect.left - 8) + 'px';
+  tooltip.style.bottom = (window.innerHeight - btnRect.top + 12) + 'px';
+  tooltip.classList.remove('hidden');
+  // 5 秒后自动消失
+  setTimeout(() => { if (!tooltip.classList.contains('hidden')) dismissTooltip(); }, 5000);
+}
+
+function dismissTooltip() {
+  const tooltip = $('bankTooltip');
+  if (tooltip) tooltip.classList.add('hidden');
+  appData.bankTooltipSeen = true;
+  saveData();
+}
+
+$('bankTooltipBtn').addEventListener('click', () => {
+  dismissTooltip();
+  showBankPickerPanel();
+});
+
+// 点击 tooltip 之外的任意位置也可关闭
+document.addEventListener('click', (e) => {
+  const tooltip = $('bankTooltip');
+  if (!tooltip || tooltip.classList.contains('hidden')) return;
+  if (!tooltip.contains(e.target)) dismissTooltip();
+});
+
+let bankPickerExpanded = false;
+
+function showBankPickerPanel() {
+  $('panel').dataset.panel = 'bankpicker';
+  if (isProgrammerBank()) bankPickerExpanded = true;
+  renderBankPickerPanel();
+  $('overlay').classList.add('show');
+}
+
+function renderBankPickerPanel() {
+  const panel = $('panel');
+  if (!panel || panel.dataset.panel !== 'bankpicker') return;
+
+  const customCount = (appData && appData.customWords || []).length;
+  const progActive = isProgrammerBank();
+  const expanded = bankPickerExpanded || progActive;
+
+  let html = '';
+  html += '<div class="panel-section"><h3 style="margin:0 0 12px;font-size:16px;">选择词库</h3></div>';
+
+  // 每个词库项
+  const items = [{ bank: 'cet4', label: 'CET-4', count: CET4_WORDS.length, sub: false }];
+  items.push({ bank: 'cet6', label: 'CET-6', count: CET6_WORDS.length, sub: false });
+  items.push({ bank: 'programmer-header', label: '程序员<span class="bank-badge">NEW</span>', count: PROGRAMMER_WORDS.length, sub: false, expandable: true, expanded, progActive });
+  if (expanded) {
+    for (const s of PROGRAMMER_SUB_BANKS) {
+      items.push({ bank: s.bank, label: s.label, count: s.words.length, sub: true });
+    }
+  }
+  items.push({ bank: 'custom', label: '自定义', count: customCount > 0 ? customCount : '未导入', sub: false });
+
+  for (const it of items) {
+    const isProgHeader = it.expandable;
+    const active = isProgHeader ? it.progActive : (currentBank === it.bank);
+    const cls = 'bank-item' + (it.sub ? ' bank-item-sub' : '') + (active ? ' bank-item-active' : '');
+    const check = active ? ' ✓' : '';
+    const arrow = it.expandable ? (it.expanded ? ' ▾' : ' ▸') : '';
+    html += `<div class="bank-item ${cls}" data-bank="${it.bank}">
+      <span>${it.label}${check}${arrow}</span>
+      <span class="bank-item-count">${it.count}</span>
+    </div>`;
+  }
+
+  panel.innerHTML = `<div class="bank-picker-panel">${html}</div>`;
+
+  // 点击事件委托
+  panel.querySelector('.bank-picker-panel').addEventListener('click', (e) => {
+    const item = e.target.closest('.bank-item');
+    if (!item) return;
+    const bank = item.dataset.bank;
+    if (bank === 'programmer-header') {
+      bankPickerExpanded = !bankPickerExpanded;
+      renderBankPickerPanel();
+      return;
+    }
+    if (!bank || bank === currentBank) { closePanel(); return; }
+    switchBank(bank);
+    closePanel();
+  });
+}
+
+function switchBank(bank) {
   clearAutoAdvance();
   flushStudyDuration();
-  currentBank = currentBank === 'cet4' ? 'cet6' : (currentBank === 'cet6' && hasCustomWords()) ? 'custom' : 'cet4';
-  appData.bank = currentBank;
+  if (bank.startsWith('programmer') && currentMode === 'spelling') {
+    currentMode = 'flashcard';
+    $('modeTabs').querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+    const flashTab = $('modeTabs').querySelector('[data-mode="flashcard"]');
+    if (flashTab) flashTab.classList.add('active');
+  }
+  currentBank = bank;
+  appData.bank = bank;
   invalidateWordCaches();
   saveData(); buildSession(); renderCard();
-  showToast(`已无缝切换至 ${$('bankLabel').textContent}`);
+}
+
+$('btnBank').addEventListener('click', () => {
+  if ($('overlay').classList.contains('show') && $('panel').dataset.panel === 'bankpicker') {
+    closePanel();
+    return;
+  }
+  showBankPickerPanel();
 });
 
 $('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) closePanel(); });
@@ -2178,6 +2369,11 @@ async function init() {
   migrateData();
   currentBank = appData.bank || 'cet4';
   updateStatsUI();
+
+  // 首次引导：提示程序员词库
+  if (!appData.bankTooltipSeen) {
+    showBankTooltip();
+  }
 
   const loggedIn = await checkSession();
   if (loggedIn) {
