@@ -875,6 +875,7 @@ let studySeconds = 0;
 let waitingAdvance = false;
 let wordBookExpanded = false;
 let wordBookTab = 'all';
+let sessionWordCounts = {};
 
 // ========== 数据持久化（健壮性优化） ==========
 // 格式化本地日期为 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致日期错一天）
@@ -996,6 +997,7 @@ async function syncFromCloud() {
 // 推送本地数据到云端（防抖 3 秒，避免频繁请求）
 async function syncToCloud() {
   if (!dbClient) return;
+  flushStudyDuration();
   const { data: { user } } = await dbClient.auth.getUser();
   if (!user) return;
 
@@ -1071,43 +1073,66 @@ function ensureWord(wordKey) {
 const REVIEW_INTERVALS = [0, 1440, 2880, 5760, 10080, 21600, 43200]; // 分钟
 
 function getNextReviewTime(level) {
-  const minutes = REVIEW_INTERVALS[Math.min(level, 5)];
+  const minutes = REVIEW_INTERVALS[Math.min(level, REVIEW_INTERVALS.length - 1)];
   return Date.now() + minutes * 60 * 1000;
 }
 
-function pickNextWord() {
+function getLearningQueues(excludeWords = new Set()) {
   const allWords = getActiveWords();
   const now = Date.now();
 
-  let reviewQueue = [];
-  let newQueue = [];
+  const reviewQueue = [];
+  const weakQueue = [];
+  const newQueue = [];
+  const masteredQueue = [];
 
   for (const word of allWords) {
+    if (excludeWords.has(word.w)) continue;
     const state = appData.words[word.w];
-    if (state && state.nextReview && state.nextReview <= now && state.level > 0 && state.level < 6) {
-      reviewQueue.push(word);
+    if (state && state.level === 0 && state.nextReview) {
+      if (state.nextReview <= now) {
+        reviewQueue.push({ word, type: 'review', due: state.nextReview, level: 0 });
+      }
+    } else if (state && state.nextReview && state.nextReview <= now && state.level > 0 && state.level < 6) {
+      reviewQueue.push({ word, type: 'review', due: state.nextReview || 0, level: state.level });
+    } else if (state && state.level > 0 && state.level < 3) {
+      weakQueue.push({ word, type: 'review', due: state.nextReview || Number.MAX_SAFE_INTEGER, level: state.level });
     } else if (!state || state.level === 0) {
-      newQueue.push(word);
+      newQueue.push({ word, type: 'new', due: Number.MAX_SAFE_INTEGER, level: 0 });
+    } else if (state && state.level >= 6) {
+      masteredQueue.push({ word, type: 'review', due: state.nextReview || Number.MAX_SAFE_INTEGER, level: state.level });
     }
   }
 
-  shuffle(reviewQueue);
+  reviewQueue.sort((a, b) => (a.due - b.due) || (a.level - b.level));
+  weakQueue.sort((a, b) => (a.level - b.level) || (a.due - b.due));
   shuffle(newQueue);
+  shuffle(masteredQueue);
 
-  if (reviewQueue.length > 0 && newQueue.length > 0 && Math.random() < 0.8) {
-    return { word: reviewQueue[0], type: 'review' };
+  return { reviewQueue, weakQueue, newQueue, masteredQueue };
+}
+
+function takeFromQueue(queue, limit, picked) {
+  const taken = [];
+  while (queue.length && taken.length < limit) {
+    const item = queue.shift();
+    if (picked.has(item.word.w)) continue;
+    picked.add(item.word.w);
+    taken.push(item);
   }
-  if (reviewQueue.length > 0) return { word: reviewQueue[0], type: 'review' };
-  if (newQueue.length > 0) return { word: newQueue[0], type: 'new' };
-  
-  const mastered = allWords.filter(w => {
-    const s = appData.words[w.w];
-    return s && s.level >= 6;
-  });
-  if (mastered.length > 0) {
-    shuffle(mastered);
-    return { word: mastered[0], type: 'review' };
+  return taken;
+}
+
+function pickNextWord() {
+  const { reviewQueue, weakQueue, newQueue, masteredQueue } = getLearningQueues();
+
+  if (reviewQueue.length > 0 && newQueue.length > 0 && Math.random() < 0.7) {
+    return reviewQueue[0];
   }
+  if (reviewQueue.length > 0) return reviewQueue[0];
+  if (weakQueue.length > 0) return weakQueue[0];
+  if (newQueue.length > 0) return newQueue[0];
+  if (masteredQueue.length > 0) return masteredQueue[0];
   return null;
 }
 
@@ -1133,23 +1158,26 @@ function markWordUnsure(wordKey) {
 function getReviewCount() {
   const now = Date.now();
   let count = 0;
-  for (const [key, s] of Object.entries(appData.words)) {
-    if (s && s.nextReview && s.nextReview <= now && s.level > 0 && s.level < 6) count++;
+  for (const word of getActiveWords()) {
+    const s = appData.words[word.w];
+    if (s && s.nextReview && s.nextReview <= now && s.level < 6) count++;
   }
   return count;
 }
 
 function getNewWordCount() {
   let count = 0;
-  for (const [key, s] of Object.entries(appData.words)) {
-    if (s && s.level === 0) count++;
+  for (const word of getActiveWords()) {
+    const s = appData.words[word.w];
+    if (!s || (s.level === 0 && !s.nextReview)) count++;
   }
   return count;
 }
 
 function getMasteredCount() {
   let count = 0;
-  for (const [key, s] of Object.entries(appData.words)) {
+  for (const word of getActiveWords()) {
+    const s = appData.words[word.w];
     if (s && s.level >= 6) count++;
   }
   return count;
@@ -1212,6 +1240,18 @@ function recordStudy(known) {
 function getTodaySeconds() {
   const saved = appData.dailyStats[getToday()]?.duration || 0;
   return saved + studySeconds;
+}
+
+function flushStudyDuration() {
+  if (!appData || studySeconds <= 0) return;
+  const stats = getDailyStats();
+  stats.duration = (stats.duration || 0) + studySeconds;
+  studySeconds = 0;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+  } catch (e) {
+    console.warn("Storage quota exceeded or inaccessible.", e);
+  }
 }
 
 // ========== UI 更新 ==========
@@ -1312,12 +1352,20 @@ function renderWordBook() {
     return;
   }
 
-  let html = '';
+  list.innerHTML = '';
   filtered.forEach(e => {
     const dotClass = e.level >= 6 ? 'mastered' : 'learning';
-    html += '<div class="wb-item"><span class="wb-item-text">' + e.word + ' ' + e.meaning + '</span><span class="wb-item-dot ' + dotClass + '"></span></div>';
+    const item = document.createElement('div');
+    const text = document.createElement('span');
+    const dot = document.createElement('span');
+    item.className = 'wb-item';
+    text.className = 'wb-item-text';
+    text.textContent = e.word + ' ' + e.meaning;
+    dot.className = 'wb-item-dot ' + dotClass;
+    item.appendChild(text);
+    item.appendChild(dot);
+    list.appendChild(item);
   });
-  list.innerHTML = html;
 }
 
 function renderCard() {
@@ -1408,6 +1456,7 @@ function advanceWord() {
     currentWord = sessionWords[sessionIndex];
     renderCard();
   } else {
+    flushStudyDuration();
     currentWord = null;
     renderCard();
     const stats = getDailyStats();
@@ -1432,6 +1481,26 @@ function tryAdvance() {
   }
 }
 
+function scheduleImmediateRetry(item) {
+  if (!item || !item.word) return;
+  const wordKey = item.word.w;
+  const count = sessionWordCounts[wordKey] || 1;
+  if (count >= 2) return;
+
+  const futureHasSameWord = sessionWords
+    .slice(sessionIndex + 1)
+    .some(s => s.word.w === wordKey);
+  if (futureHasSameWord) return;
+
+  sessionWordCounts[wordKey] = count + 1;
+  const retryItem = { word: item.word, type: 'review', retry: true };
+  const minGap = 3;
+  const maxGap = 6;
+  const gap = Math.min(maxGap, Math.max(minGap, sessionWords.length - sessionIndex));
+  const insertAt = Math.min(sessionWords.length, sessionIndex + gap);
+  sessionWords.splice(insertAt, 0, retryItem);
+}
+
 // ========== 模式应答逻辑 ==========
 function answerFlashcard(quality) {
   if (!currentWord || !isFlipped) return;
@@ -1445,9 +1514,11 @@ function answerFlashcard(quality) {
   } else if (quality === 'unsure') {
     markWordUnsure(wordKey);
     recordStudy(false);
+    scheduleImmediateRetry(currentWord);
   } else {
     markWord(wordKey, false);
     recordStudy(false);
+    scheduleImmediateRetry(currentWord);
   }
 
   const card = $('card');
@@ -1476,6 +1547,7 @@ function answerChoice(index, choices) {
 
   markWord(wordData.w, isCorrect);
   recordStudy(isCorrect);
+  if (!isCorrect) scheduleImmediateRetry(currentWord);
   
   if (isCorrect && appData.words[wordData.w].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
   isCorrect ? setTimeout(() => advanceWord(), 1000) : showAdvanceHint();
@@ -1501,6 +1573,7 @@ function answerSpelling() {
 
   markWord(wordData.w, isCorrect);
   recordStudy(isCorrect);
+  if (!isCorrect) scheduleImmediateRetry(currentWord);
   
   if (isCorrect && appData.words[wordData.w].level >= 6) showToast('🎉 ' + wordData.w + ' 已掌握！');
   
@@ -1510,12 +1583,40 @@ function answerSpelling() {
 
 function buildSession() {
   sessionWords = [];
-  for (let i = 0; i < 30; i++) {
-    const pick = pickNextWord();
-    if (!pick) break;
-    if (!sessionWords.find(s => s.word.w === pick.word.w)) sessionWords.push(pick);
-    if (sessionWords.length >= 15) break;
+  sessionWordCounts = {};
+
+  const picked = new Set();
+  const { reviewQueue, weakQueue, newQueue, masteredQueue } = getLearningQueues();
+  const dueReviews = takeFromQueue(reviewQueue, reviewQueue.length >= 15 ? 15 : 10, picked);
+  const weakReviews = takeFromQueue(weakQueue, Math.min(2, 15 - dueReviews.length), picked);
+  const newWords = takeFromQueue(newQueue, Math.min(5, 15 - dueReviews.length - weakReviews.length), picked);
+  const reviews = [...dueReviews, ...weakReviews];
+  const fallback = [
+    ...takeFromQueue(reviewQueue, 15 - reviews.length - newWords.length, picked),
+    ...takeFromQueue(weakQueue, 15 - reviews.length - newWords.length, picked),
+    ...takeFromQueue(newQueue, 15 - reviews.length - newWords.length, picked),
+    ...takeFromQueue(masteredQueue, 15 - reviews.length - newWords.length, picked)
+  ];
+
+  let reviewIndex = 0;
+  let newIndex = 0;
+  while (sessionWords.length < 15 && (reviewIndex < reviews.length || newIndex < newWords.length)) {
+    for (let i = 0; i < 2 && reviewIndex < reviews.length && sessionWords.length < 15; i++) {
+      sessionWords.push(reviews[reviewIndex++]);
+    }
+    if (newIndex < newWords.length && sessionWords.length < 15) {
+      sessionWords.push(newWords[newIndex++]);
+    }
   }
+
+  for (const item of fallback) {
+    if (sessionWords.length >= 15) break;
+    sessionWords.push(item);
+  }
+
+  sessionWords.forEach(item => {
+    sessionWordCounts[item.word.w] = (sessionWordCounts[item.word.w] || 0) + 1;
+  });
   sessionIndex = 0;
   currentWord = sessionWords.length > 0 ? sessionWords[0] : null;
 }
@@ -1660,13 +1761,16 @@ $('btnCalendar').addEventListener('click', () => showCalendarPanel());
 $('btnImport').addEventListener('click', () => showImportPanel());
 $('btnReset').addEventListener('click', () => {
   if (confirm('是否重置您的所有学习进度？（词库内容将被保留）')) {
+    studySeconds = 0;
     appData.words = {}; appData.dailyStats = {}; appData.streak = 0; appData.lastStudyDate = null;
     saveData(); buildSession(); renderCard(); showToast('系统进度已重置');
   }
 });
 $('btnBank').addEventListener('click', () => {
+  flushStudyDuration();
   currentBank = currentBank === 'cet4' ? 'cet6' : (currentBank === 'cet6' && appData.customWords.length > 0) ? 'custom' : 'cet4';
   appData.bank = currentBank;
+  getActiveWords().forEach(word => ensureWord(word.w));
   saveData(); buildSession(); renderCard();
   showToast(`已无缝切换至 ${$('bankLabel').textContent}`);
 });
@@ -1791,10 +1895,7 @@ async function startWordApp() {
   startTimer();
 
   window.addEventListener('beforeunload', () => {
-    if (studySeconds > 0) {
-      const stats = getDailyStats();
-      stats.duration = (stats.duration || 0) + studySeconds;
-    }
+    flushStudyDuration();
     saveData();
   });
 }
