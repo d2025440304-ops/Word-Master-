@@ -546,6 +546,14 @@ body {
 }
 .auth-logout a { color: var(--text-tertiary); text-decoration: none; }
 .auth-panel .btn-row .btn { flex: 1; }
+.auth-guest-btn {
+  width: 100%; margin-top: 10px; background: rgba(0,0,0,0.04);
+  color: var(--text); font-weight: 600;
+}
+.auth-guest-note {
+  margin-top: 10px; text-align: center; font-size: 12px;
+  color: var(--text-tertiary); line-height: 1.5;
+}
 
 /* ========== 日历 ========== */
 .calendar-weekdays {
@@ -761,6 +769,8 @@ body {
     <div class="btn-row" style="margin-top:8px">
       <button class="btn btn-primary" id="btnAuthSubmit">登录</button>
     </div>
+    <button class="btn auth-guest-btn" id="btnGuestMode">先试用一下</button>
+    <p class="auth-guest-note">试用数据只保存在当前浏览器，登录后可开启云端同步。</p>
     <p class="auth-switch">还没有账号？<a href="#" id="authToggle">立即注册</a></p>
     <p class="auth-logout"><a href="#" id="authLogout" class="hidden">退出登录</a></p>
   </div>
@@ -779,6 +789,9 @@ const SUPABASE_ANON_KEY = 'sb_publishable_-2NEP3fbmqFi1zouAtGnHQ_t7UfdZqc';
 
 let dbClient = null;
 let authViewState = 'login'; // login | register
+let guestMode = false;
+let appStarted = false;
+let beforeUnloadBound = false;
 
 function initSupabase() {
   if (window.supabase && window.supabase.createClient) {
@@ -883,7 +896,7 @@ function loadData() {
 function saveData() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-    scheduleCloudSync(); // 触发防抖云端同步
+    if (!guestMode) scheduleCloudSync(); // 触发防抖云端同步
   } catch (e) {
     console.warn("Storage quota exceeded or inaccessible.", e);
   }
@@ -894,6 +907,7 @@ let _syncTimer = null;
 
 // 从云端拉取数据并合并到本地（更新的一方优先）
 async function syncFromCloud() {
+  if (guestMode) return;
   if (!dbClient) return;
   const { data: { user } } = await dbClient.auth.getUser();
   if (!user) return;
@@ -976,6 +990,7 @@ async function syncFromCloud() {
 
 // 推送本地数据到云端（防抖 3 秒，避免频繁请求）
 async function syncToCloud() {
+  if (guestMode) return;
   if (!dbClient) return;
   flushStudyDuration();
   const { data: { user } } = await dbClient.auth.getUser();
@@ -1981,6 +1996,7 @@ $('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) c
 
 // 认证交互
 $('btnAuthSubmit').addEventListener('click', handleAuth);
+$('btnGuestMode').addEventListener('click', startGuestMode);
 
 $('authToggle').addEventListener('click', (e) => {
   e.preventDefault();
@@ -1989,6 +2005,7 @@ $('authToggle').addEventListener('click', (e) => {
 });
 
 $('authOverlay').addEventListener('keydown', (e) => {
+  if (e.target && e.target.id === 'btnGuestMode') return;
   if (e.key === 'Enter') {
     e.preventDefault();
     handleAuth();
@@ -2070,7 +2087,8 @@ async function handleAuth() {
     } else {
       showToast('登录成功');
       hideAuthPanel();
-      startWordApp();
+      guestMode = false;
+      startWordApp({ syncCloud: true });
     }
   } catch (e) {
     showToast(e.message || '认证请求失败');
@@ -2079,8 +2097,19 @@ async function handleAuth() {
   }
 }
 
-async function startWordApp() {
-  await syncFromCloud(); // 先从云端拉取进度并合并
+async function startGuestMode() {
+  guestMode = true;
+  hideAuthPanel();
+  showToast('已进入试用模式，进度将保存在本机');
+  startWordApp({ syncCloud: false });
+}
+
+async function startWordApp(options = {}) {
+  const { syncCloud = !guestMode } = options;
+  if (appStarted) return;
+  appStarted = true;
+
+  if (syncCloud) await syncFromCloud(); // 先从云端拉取进度并合并
   currentBank = appData.bank || currentBank; // 云端可能覆盖了词库选择
   invalidateWordCaches();
   pruneUntouchedWordStates();
@@ -2091,10 +2120,13 @@ async function startWordApp() {
   renderCard();
   startTimer();
 
-  window.addEventListener('beforeunload', () => {
-    flushStudyDuration();
-    saveData();
-  });
+  if (!beforeUnloadBound) {
+    beforeUnloadBound = true;
+    window.addEventListener('beforeunload', () => {
+      flushStudyDuration();
+      saveData();
+    });
+  }
 }
 
 // ========== 初始化与防错迁移 ==========
@@ -2149,8 +2181,9 @@ async function init() {
 
   const loggedIn = await checkSession();
   if (loggedIn) {
+    guestMode = false;
     hideAuthPanel();
-    startWordApp();
+    startWordApp({ syncCloud: true });
   } else {
     showAuthPanel();
     syncAuthUI();
