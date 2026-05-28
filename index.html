@@ -1137,6 +1137,7 @@ function getKnownWordKeySet() {
   const keys = new Set();
   CET4_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
   CET6_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
+  PROGRAMMER_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
   if (typeof CUSTOM_WORDS !== 'undefined') CUSTOM_WORDS.forEach(w => keys.add(normalizeWordKey(w.w)));
   (appData.customWords || []).forEach(w => keys.add(normalizeWordKey(w.w)));
   return keys;
@@ -1639,15 +1640,14 @@ function renderFlashcard() {
   $('wordEn').textContent = wordData.w;
   $('wordPhonetic').textContent = wordData.p || '';
   $('wordCn').textContent = wordData.m;
-  $('wordExample').textContent = wordData.e || '';
-  // 程序员词库：闪卡背面显示代码例句
-  if ($('codeExample')) {
-    if (isProgrammerBank() && wordData.e) {
-      $('codeExample').textContent = wordData.e;
-      $('codeExample').style.display = 'block';
-    } else {
-      $('codeExample').style.display = 'none';
-    }
+  // 程序员词库：e 字段用代码样式渲染；普通词库：e 字段用斜体例句渲染
+  if (isProgrammerBank() && wordData.e) {
+    $('wordExample').textContent = '';
+    $('codeExample').textContent = wordData.e;
+    $('codeExample').style.display = 'block';
+  } else {
+    $('wordExample').textContent = wordData.e || '';
+    if ($('codeExample')) $('codeExample').style.display = 'none';
   }
   
   const isReview = currentWord.type === 'review';
